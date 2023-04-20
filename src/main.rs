@@ -1,8 +1,9 @@
 #[macro_use] extern crate rocket;
-#[macro_use] extern crate fern;
+extern crate fern;
 extern crate yrs;
 extern crate walkdir;
 extern crate humantime;
+extern crate regex;
 
 
 use std::path;
@@ -10,14 +11,36 @@ use std::path::Path;
 use std::ffi::OsStr;
 use std::env;
 use std::fs;
-use log::{debug, info, warn, error};
+use log::{trace, debug, info, warn, error};
 use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 use std::time::SystemTime;
+use clap::Parser;
+use clap_verbosity_flag::Verbosity;
 
-fn setup_logger() -> Result<(), fern::InitError> {
+
+#[derive(Parser, Debug)]
+#[command(name = "crew")]
+#[command(author = "James Clemer")]
+#[command(version = "0.0.1")]
+#[command(about = "A tool for sharing state via CRDTs in the YJS style")]
+struct Arguments {
+    #[arg(short, long, default_value="crewdoc")]
+    name: String,
+
+    #[arg(short, long, default_value=".")]
+    path: String,
+
+    #[arg(short, long)]
+    exclude: Vec<String>,
+
+    #[command(flatten)]
+    verbose: Verbosity,
+}
+
+fn setup_logger(args: &Arguments) -> Result<(), fern::InitError> {
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -28,7 +51,7 @@ fn setup_logger() -> Result<(), fern::InitError> {
                 message
             ))
         })
-        .level(log::LevelFilter::Debug)
+        .level(args.verbose.log_level_filter())
         .chain(std::io::stdout())
         .chain(fern::log_file("output.log")?)
         .apply()?;
@@ -40,35 +63,53 @@ fn setup_logger() -> Result<(), fern::InitError> {
 3. Serve
 */
 
+fn is_included(exclusions: &Vec<String>, entry: &DirEntry) -> bool {
+    let path = entry.path();
+    let path = path.canonicalize().unwrap();
 
+    trace!("Path is: {}", path.display());
+    for ancestor in path.ancestors() {
+        trace!("\tAncestor path is: {}", ancestor.display());
+        for exclude in exclusions {
+            let exclude = Path::new(&exclude);
+            let exclude = exclude.canonicalize().unwrap();
+
+            trace!("\t\tExclude path is: {}", exclude.display());
+            if ancestor == exclude {
+                info!("Excluding '{}' because '{}' is excluded", path.display(), exclude.display());
+                return false;
+            }
+        }
+    }
+    true
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>>{
-    setup_logger()?;
+    let args = Arguments::parse();
+    setup_logger(&args)?;
 
-    let args: Vec<String> = env::args().collect();
-    let path_arg = args.get(1);
-    let path_var = option_env!("CREW_DIR");
-    let path = if let Some(arg) = path_arg {
-        Path::new(arg)
-    } else if let Some(var) = path_var {
-        Path::new(var)
-    } else {
-        Path::new(".")
-    };
+    let doc_root = Path::new(&args.path).canonicalize()?;
 
-    let doc_arg = args.get(2);
-    let doc_var = option_env!("CREW_DOC");
-    let name = if let Some(arg) = doc_arg {
-        arg
-    } else if let Some(var) = doc_var {
-        var
-    } else {
-        "crewDoc" //TODO: make this some UUID thing
-    };
+    let dir = WalkDir::new(&args.path)
+        .follow_links(true)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(|e| is_included(&args.exclude, &e))
+        .filter_map(|e| e.ok());
 
+    let mut doc = Doc::new();
+    for entry in dir {
+        let absolute_path = entry.path().canonicalize()?;
+        let doc_path = absolute_path.strip_prefix(&doc_root)?;
 
- /*   let dir = WalkDir::new(path).follow_links(true);
-    let doc = Doc::new();
+        // add sub-directories as nested maps
+        println!("{} -> {}", doc_path.display(), absolute_path.display());
+        for c in doc_path.components() {
+            println!("{:?}", c);
+        }
+    }
+
+ /*   let doc = Doc::new();
     let dir_map = doc.get_or_insert_map(name);
     for entry in dir {
         match entry {
@@ -78,6 +119,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     }
 */
     //let dir = doc.get_or_insert_map(name);
-    println!("The dir is {}", path.to_str().unwrap_or("<cannot display path>"));
     Ok(())
 }
