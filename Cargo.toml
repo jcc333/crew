@@ -1,0 +1,19 @@
+[package]
+name = "crew"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+git2 = "0.17.0"
+libp2p = "0.51.3"
+log = "0.4.17"
+pretty_env_logger = "0.4.0"
+rocket = "0.5.0-rc"
+serde = "1.0.160"
+yrs = "0.16.5"
+walkdir = "2"
+fern = "0.6.2"
+humantime = "2.1.0"
+clap = { version = "4.2.4", features = ["derive"] }
