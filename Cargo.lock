@@ -310,6 +310,7 @@ dependencies = [
  "clap-verbosity-flag",
  "fern",
  "humantime 2.1.0",
+ "lib0",
  "libp2p",
  "log",
  "pretty_env_logger",
