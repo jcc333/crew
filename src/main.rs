@@ -9,8 +9,8 @@ extern crate regex;
 use std::path::Path;
 use std::fs;
 use log::{trace, debug, info, warn, error};
-use yrs::types::ToJson;
-use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update, MapPrelim, MapRef, Map};
+use yrs::Map;
+use yrs::{types::ToJson, Transact};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use walkdir::{DirEntry, WalkDir};
@@ -88,49 +88,62 @@ fn is_included(exclusions: &Vec<String>, entry: &DirEntry) -> bool {
 }
 
 
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Arguments::parse();
     setup_logger(&args)?;
 
     let doc_root = Path::new(&args.path).canonicalize()?;
 
-    let dir = WalkDir::new(&args.path)
+    let dir: Vec<walkdir::DirEntry> = WalkDir::new(&args.path)
         .follow_links(false)
         .sort_by_file_name()
         .into_iter()
         .filter_entry(|e| is_included(&args.exclude, &e))
-        .filter_map(|e| e.ok());
+        .filter_map(|e| e.ok())
+        .collect();
 
-    let doc = Doc::new();
-    let mut root = doc.get_or_insert_map(&args.name);
+    let root_doc = yrs::Doc::new();
+
+    for entry in dir.clone() {
+        println!("{}", entry.path().display());
+    }
+
+
     for entry in dir {
+        let absolute_path = entry.path().canonicalize()?;
+        let doc_path = absolute_path.strip_prefix(&doc_root)?;
+
         debug!("Processing '{}'", entry.path().display());
-        let acc = &root;
-        //println!("{}, {:?}, is_dir={}", entry.path().display(), entry, entry.path().is_dir());
+        let mut acc = Box::new(root_doc.get_or_insert_map(&args.name));
+
         let file_type = entry.file_type();
-        if file_type.is_dir() {
-            //
-        } else if file_type.is_file(){
-            let file_name = entry.file_name().to_str();
-            if let Some(key) = file_name {
-                match std::fs::read_to_string(entry.path()) {
-                    Ok(file_str) => {
-                        trace!("Inserting for '{}', '{}'", key, file_str);
-                        let text = yrs::TextPrelim::new(file_str);
-                        {
-                            let mut txn = acc.transact_mut();
-                            acc.insert(&mut txn, key, text);
-                        }
-                        trace!("Inserted for '{}'", key);
-                    },
-                    Err(error) => error!("Encountered an error reading '{}': '{}'", key, error)
+        let file_name = entry.file_name().to_str();
+        if let Some(key) = file_name {
+            if file_type.is_dir() {
+                let value = yrs::Doc::new();
+                let dir_map = value.get_or_insert_map(key);
+                trace!("Nesting for '{}' in key '{}''", entry.path().display(), key);
+                {
+                    let mut txn = acc.transact_mut();
+                    acc.insert(&mut txn, key, value);
                 }
+                *acc = dir_map;
+            } else if file_type.is_file(){
+                let value = yrs::Doc::new();
+                {
+                    let mut txn = acc.transact_mut();
+                    acc.insert(&mut txn, key, value);
+                    txn.commit()
+                }
+            } else {
+                error!("Could not get a file-name for '{}'", entry.path().display());
             }
         }
     }
-    let txn = doc.transact();
-    let json = doc.to_json(&txn);
+
+
+    let txn = root_doc.transact();
+    let json = root_doc.to_json(&txn);
     println!("{}", json);
     //let dir = doc.get_or_insert_map(name);
     Ok(())
